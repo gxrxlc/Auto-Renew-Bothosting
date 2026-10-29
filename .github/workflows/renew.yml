@@ -1,9 +1,10 @@
 name: Auto Renew Bot-hosting
 
 on:
-  schedule:
-    - cron: '0 4 * * *' # 每天UTC 4点 (北京时间12点, 一般都会推迟),自行根据服务到期时间调整
   workflow_dispatch:
+  # 注意：这里故意去掉了 GitHub schedule
+  # GitHub 定时触发在这个仓库上一直不触发，改由 Cloudflare Workers 的 Cron Trigger
+  # 调 workflow_dispatch API 来触发，和手动点 Run workflow 走同一个入口
 
 jobs:
   Renew-bot:
@@ -61,7 +62,7 @@ jobs:
           count=0
           for run_id in $runs; do
             count=$((count + 1))
-            if [ $count -gt 1 ]; then
+            if [ $count -gt 5 ]; then
               echo "删除运行记录: $run_id"
               gh run delete $run_id || true
             fi
