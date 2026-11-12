@@ -302,7 +302,7 @@ def format_countdown(countdown_str: str) -> str:
 
 # 归一化日期为 YYYY/MM/DD
 def normalize_date(date_str: str) -> str:
-    parts = date_str.split('/')
+    parts = date_str.replace('-', '/').split('/')
     if len(parts) == 3:
         if len(parts[2]) == 4:   # MM/DD/YYYY
             return f"{parts[2]}/{int(parts[0]):02d}/{int(parts[1]):02d}"
@@ -310,7 +310,7 @@ def normalize_date(date_str: str) -> str:
             return f"{parts[0]}/{int(parts[1]):02d}/{int(parts[2]):02d}"
     return date_str
 
-DATE_RE = r"(\d{4}/\d{1,2}/\d{1,2}|\d{1,2}/\d{1,2}/\d{4})"
+DATE_RE = r"(\d{4}[/-]\d{1,2}[/-]\d{1,2}|\d{1,2}/\d{1,2}/\d{4})"
 
 # 获取过期日期
 def extract_expiry_date(page_source: str) -> str:
@@ -335,6 +335,41 @@ def get_expiry_from_dom(sb) -> str:
         except Exception:
             pass
     return None
+
+
+# 弹窗续期按钮兜底：扫描可见按钮，优先弹窗内、文字含 renew/confirm 等、DOM 靠后的
+MODAL_CLICK_JS = """
+var vis = function(el){ var r = el.getBoundingClientRect(); var st = getComputedStyle(el);
+    return r.width > 0 && r.height > 0 && st.visibility !== 'hidden' && st.display !== 'none' && st.opacity !== '0'; };
+var words = ['renew', 'confirm', 'claim', 'continue', 'submit', 'extend', 'yes'];
+var btns = Array.prototype.slice.call(document.querySelectorAll('button, [role="button"], a.btn, input[type="submit"]')).filter(vis);
+var best = null, bestScore = -1;
+for (var i = 0; i < btns.length; i++) {
+    var b = btns[i];
+    var t = (b.innerText || b.value || '').trim();
+    var low = t.toLowerCase();
+    if (!words.some(function(w){ return low.indexOf(w) >= 0; })) continue;
+    if (b.disabled || b.getAttribute('aria-disabled') === 'true') continue;
+    var inModal = !!b.closest('[role="dialog"], .modal, [class*="modal"], [class*="Modal"], [class*="dialog"], [class*="Dialog"], [data-state="open"]');
+    if (!inModal && low === 'renew free plan') continue;
+    var score = (inModal ? 100000 : 0) + i;
+    if (score > bestScore) { bestScore = score; best = b; }
+}
+if (!best) return null;
+best.scrollIntoView({block: 'center'});
+best.click();
+return 'clicked:' + (best.innerText || best.value || '').trim().slice(0, 40);
+"""
+
+MODAL_LIST_JS = """
+var out = [];
+var btns = document.querySelectorAll('button, [role="button"], a.btn, input[type="submit"]');
+for (var i = 0; i < btns.length; i++) {
+    var r = btns[i].getBoundingClientRect();
+    if (r.width > 0 && r.height > 0) out.push((btns[i].innerText || btns[i].value || '').trim().slice(0, 30) + (btns[i].disabled ? '(disabled)' : ''));
+}
+return out.join(' | ');
+"""
 
 # 主流程
 def main():
@@ -396,14 +431,14 @@ def main():
                 print("🖱️ 提交登录按钮")
                 sb.sleep(6)  # 等待页面加载
                 sb.wait_for_ready_state_complete()
-                sb.open(f"{BASE_URL}/a/billings")
+                sb.open(f"{BASE_URL}/dash/billings")
                 sb.wait_for_ready_state_complete()
                 sb.sleep(3)
                 current_url = sb.get_current_url()
                 current_title = sb.get_title()
                 print(f"📝 当前URL: {current_url}, Title: {current_title}")
 
-                if "/a/billings" in current_url and "/login" not in current_url and "error=" not in current_url:
+                if ("/a/billings" in current_url or "/dash/billings" in current_url) and "/login" not in current_url and "error=" not in current_url:
                     login_ok = True
                     print("✅ Password 登录成功,当前已到达账单页")
                 else:
@@ -501,11 +536,23 @@ def main():
             except Exception as e:
                 print(f"续期按钮点击失败: {e}")
 
+            # 兜底: 新版页面弹窗结构变化时，用 JS 扫描可见按钮并点击
+            if not modal_button_clicked:
+                for _ in range(20):
+                    res = js(sb, MODAL_CLICK_JS, None)
+                    if isinstance(res, str) and res.startswith("clicked:"):
+                        modal_button_clicked = True
+                        print(f"✅ 已点击续期按钮(兜底): '{res[8:]}'")
+                        break
+                    sb.sleep(1)
+                if not modal_button_clicked:
+                    print(f"🔍 页面可见按钮: {js(sb, MODAL_LIST_JS, '')}")
+
             print("⏳ 等待新的过期时间...")
             sb.sleep(8)
             # 刷新账单页再读取，避免读到点击前的旧页面
             try:
-                sb.open("https://bot-hosting.net/a/billings")
+                sb.open("https://bot-hosting.net/dash/billings")
                 sb.wait_for_ready_state_complete()
                 sb.sleep(4)
                 sb.save_screenshot("renew_result.png")
