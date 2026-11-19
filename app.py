@@ -372,6 +372,21 @@ return out.join(' | ');
 """
 
 # 主流程
+# 关闭 Cookie 同意弹窗（欧洲代理 IP 会弹 Consent / Do not consent）
+_CONSENT_JS = """(function(){var w=['do not consent','consent','accept all','reject all','agree','i accept'];
+var b=Array.prototype.slice.call(document.querySelectorAll('button,[role="button"]'));
+for(var i=0;i<w.length;i++){for(var j=0;j<b.length;j++){var t=(b[j].innerText||'').trim().toLowerCase();
+if(t===w[i]&&b[j].getBoundingClientRect().width>0){b[j].click();return w[i];}}}return '';})()"""
+
+def dismiss_consent(sb):
+    try:
+        hit = js(sb, "return " + _CONSENT_JS, default="")
+    except Exception:
+        hit = ""
+    if hit:
+        print(f"🍪 已关闭 Cookie 同意弹窗: '{hit}'")
+        sb.sleep(2)
+
 def main():
     print("#" * 25)
     print("   Bot-hosting 自动续期")
@@ -403,16 +418,45 @@ def main():
             print("🚀 启动浏览器...")
             try:
                 print(f"🌐 访问 {BASE_URL}/login")
-                sb.open(f"{BASE_URL}/login")
+                sb.uc_open_with_reconnect(f"{BASE_URL}/login", 6)
                 sb.wait_for_ready_state_complete()
-                sb.sleep(3)
-                sb.click('button[type="submit"]') # 点击 Continue with email 按钮
-                sb.sleep(12)  # 等待页面加载
-                print(f"📧 填写邮箱...")
-                sb.input('input[type="email"]', EMAIL)
+                # 等登录表单出现；期间若是 Cloudflare 盾 / Cookie 同意框就处理掉
+                form_ok = False
+                for i in range(30):
+                    dismiss_consent(sb)
+                    if sb.is_element_visible('input[type="email"]') or sb.is_element_visible('input[type="password"]'):
+                        form_ok = True
+                        break
+                    low = sb.get_page_source().lower()
+                    if "just a moment" in low or "verify you are human" in low:
+                        if i % 5 == 0:
+                            print("🛡️ 检测到 Cloudflare 盾，尝试点击...")
+                            try:
+                                sb.uc_gui_click_captcha()
+                            except Exception as e:
+                                print(f"⚠️ 点击 Cloudflare 盾失败: {e}")
+                    sb.sleep(1)
+                if not form_ok:
+                    print(f"❌ 登录表单未出现: URL={sb.get_current_url()} Title={sb.get_title()}")
+                    try:
+                        sb.save_screenshot("login_page.png")
+                    except Exception:
+                        pass
+                    raise RuntimeError("登录表单未出现（可能被 Cloudflare 拦截，见 login_page.png）")
+
+                # 新版登录页：先填邮箱 -> Continue with email -> 再出现密码框
+                if not sb.is_element_visible('input[type="password"]'):
+                    print("📧 填写邮箱...")
+                    sb.type('input[type="email"]', EMAIL)
+                    sb.sleep(1)
+                    sb.click('button[type="submit"]')  # Continue with email
+                    sb.wait_for_element_visible('input[type="password"]', timeout=20)
+                else:
+                    print("📧 填写邮箱...")
+                    sb.type('input[type="email"]', EMAIL)
                 sb.sleep(1)
-                print(f"🔑 填写密码...")
-                sb.input('input[type="password"]', PASSWORD)
+                print("🔑 填写密码...")
+                sb.type('input[type="password"]', PASSWORD)
                 sb.sleep(3)
 
                 if wait_turnstile_present(sb):
