@@ -494,6 +494,41 @@ def main():
             send_telegram_message(format_notification("❌ 登录失败", error="Password 登录失败"))
             return
 
+        # 等账单页真正渲染出来（标题变成 Billing、或出现到期日/续期按钮），否则刷新重试
+        def _billing_ready():
+            try:
+                t = (sb.get_title() or "").lower()
+                txt = sb.get_page_text() or ""
+            except Exception:
+                return False
+            return ("billing" in t) or bool(re.search(r"renew|expires|cooldown", txt, re.I))
+
+        ready = False
+        for attempt in range(3):
+            for _ in range(20):
+                dismiss_consent(sb)
+                if _billing_ready():
+                    ready = True
+                    break
+                sb.sleep(1)
+            if ready:
+                break
+            print(f"🔁 账单页未渲染完成 (Title={sb.get_title()})，第 {attempt + 1} 次刷新...")
+            try:
+                sb.uc_open_with_reconnect(f"{BASE_URL}/dash/billings", 6)
+            except Exception:
+                sb.open(f"{BASE_URL}/dash/billings")
+            sb.wait_for_ready_state_complete()
+        if ready:
+            print(f"📄 账单页已加载: Title={sb.get_title()}")
+        else:
+            print(f"⚠️ 账单页仍未正常显示: URL={sb.get_current_url()} Title={sb.get_title()}")
+            try:
+                print("   页面文字: " + (sb.get_page_text() or "")[:300].replace("\n", " | "))
+                sb.save_screenshot("billing_not_ready.png")
+            except Exception:
+                pass
+
         # 提取当前到期日期
         sb.sleep(3)
         try:
