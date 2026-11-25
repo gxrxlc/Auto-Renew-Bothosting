@@ -497,11 +497,15 @@ def main():
         # 等账单页真正渲染出来（标题变成 Billing、或出现到期日/续期按钮），否则刷新重试
         def _billing_ready():
             try:
-                t = (sb.get_title() or "").lower()
-                txt = sb.get_page_text() or ""
+                if "billing" in (sb.get_title() or "").lower():
+                    return True
+            except Exception:
+                pass
+            try:
+                txt = sb.get_page_source() or ""
             except Exception:
                 return False
-            return ("billing" in t) or bool(re.search(r"renew|expires|cooldown", txt, re.I))
+            return bool(re.search(r"renew|expires|cooldown", txt, re.I))
 
         ready = False
         for attempt in range(3):
